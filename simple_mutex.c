@@ -12,39 +12,32 @@
 #include <stdarg.h>
 #include <stdlib.h>
 
+//Sources used: https://pages.cs.wisc.edu/~remzi/OSTEP/threads-locks.pdf, https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html, https://man7.org/linux/man-pages/man2/futex.2.html
+
 
 #define errExit(msg)    do { perror(msg); exit(EXIT_FAILURE); \
                                } while (0)
 
 
-static int futex(int *uaddr, int futex_op, uint32_t val,
-	         const struct timespec *timeout, uint32_t *uaddr2, uint32_t val3){
+static int futex(int *uaddr, int futex_op, int val,
+	         const struct timespec *timeout, int *uaddr2, int val3){
   return syscall(SYS_futex, uaddr, futex_op, val,timeout, uaddr2, val3);
 }
 
 static void futex_wait(int *futexp){
   long s;
 
-  /* atomic_compare_exchange_strong(ptr, oldval, newval)
-              atomically performs the equivalent of:
-
-                  if (*ptr == *oldval)
-                      *ptr = newval;
-
-              It returns true if the test yielded true and *ptr was updated. */
-
   while (1) {
-
                /* Is the futex available? */
                const int one = 1;
-               if (atomic_compare_exchange_strong(futexp, &one, 0))
-                   break;      /* Yes */
-
-               /* Futex is not available; wait. */
+               if (__sync_bool_compare_and_swap(futexp, &one, 0)){
+                   break;     
+	       }
 
                s = futex(futexp, FUTEX_WAIT, 0, NULL, NULL, 0);
-               if (s == -1 && errno != EAGAIN)
+               if (s == -1 && errno != EAGAIN){
                    errExit("futex-FUTEX_WAIT");
+	       }
            }
        }
 
@@ -53,11 +46,8 @@ static void
        {
            long s;
 
-           /* atomic_compare_exchange_strong() was described
-              in comments above. */
-
            const int zero = 0;
-           if (atomic_compare_exchange_strong(futexp, &zero, 1)) {
+           if (__sync_bool_compare_and_swap(futexp, &zero, 1)) {
                s = futex(futexp, FUTEX_WAKE, 1, NULL, NULL, 0);
                if (s  == -1)
                    errExit("futex-FUTEX_WAKE");
@@ -65,20 +55,17 @@ static void
        }
 
 void mutex_lock (int *mutex) {
-  //printf("/////////////// %d\n", *mutex);
   int v;
   /* Bit 31 was clear, we got the mutex (the fastpath) */
-  int preVal = __sync_lock_test_and_set (mutex, 0x80000000);
-  if ((preVal & 0x80000000) == 0)
+  int preVal = __sync_lock_test_and_set(mutex, 0x80000000);
+  __sync_lock_release(mutex);
+  if (!(__sync_and_and_fetch (&preVal, 0x80000000)))
     return;
-  //atomic_increment (mutex);
-  //printf("before  %d\n", *mutex);
   __sync_fetch_and_add (mutex,1);
-  //printf("----------- %d\n", *mutex);
   while (1) {
-    //printf("****** %d\n", *mutex);
-    int preVal = __sync_lock_test_and_set (mutex, 0x80000000);
-    if ((preVal & 0x80000000) == 0){
+    int preVal = __sync_lock_test_and_set(mutex, 0x80000000);
+    __sync_lock_release(mutex);
+    if (!(__sync_and_and_fetch (&preVal, 0x80000000))){
       __sync_fetch_and_sub (mutex,1);
       return;
     }
@@ -86,27 +73,40 @@ void mutex_lock (int *mutex) {
     v = *mutex;
     if (v >= 0)
       continue;
-    futex_wait (mutex/*, v*/);
-    //sys_futex(mutex_lock(mutex), FUTEX_WAIT, v, NULL);
-    //__sync_fetch_and_or
-    //__sync_fetch_and_add
-    //__sync_fetch_and_or
-    //__sync_fetch_and_sub
-    //syscall(sys_futex);
-    //__sync_add_and_fetch
-    //perror("error calling futex");
-    /*if(function){
-      perror
-      }*/
-    
+    futex_wait (mutex);   
   }
 }
 
 void mutex_unlock (int *mutex) {
   /* Adding 0x80000000 to counter results in 0 if and 23 only if there are not other interested threads */
-  if (__sync_fetch_and_add (mutex, 0x80000000))
+  if (__sync_add_and_fetch (mutex, 0x80000000))
     return;
 
   /* There are other threads waiting for this mutex, 28 wake one of them up. */
   futex_wake (mutex);
 }
+
+struct qnode{
+  struct qnode* next;
+  int locked;
+};
+
+void acquire_lock(struct qnode** L, struct qnode* I){
+  I->next = NULL;
+  struct qnode* predecessor = __sync_lock_test_and_set(L, I);
+  do{
+    if (predecessor != NULL){
+      I->locked = 1;
+      predecessor->next = I;
+    }
+  } while (I->locked);
+}
+
+void release_lock(struct qnode** L, struct qnode* I){
+  while (I->next == NULL){
+    if(__sync_bool_compare_and_swap(L, I, NULL))
+       return;
+    I->next->locked = 0;
+  }
+}
+  
