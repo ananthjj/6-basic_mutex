@@ -12,7 +12,10 @@
 #include <stdarg.h>
 #include <stdlib.h>
 
-//Sources used: https://pages.cs.wisc.edu/~remzi/OSTEP/threads-locks.pdf, https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html, https://man7.org/linux/man-pages/man2/futex.2.html
+//Sources used:
+//https://pages.cs.wisc.edu/~remzi/OSTEP/threads-locks.pdf,
+//https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html,
+//https://man7.org/linux/man-pages/man2/futex.2.html
 
 
 #define errExit(msg)    do { perror(msg); exit(EXIT_FAILURE); \
